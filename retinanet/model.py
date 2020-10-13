@@ -151,10 +151,41 @@ class ClassificationModel(nn.Module):
 
         return out2.contiguous().view(x.shape[0], -1, self.num_classes)
 
+class StyleClassificationModel(nn.Module):
+
+    def __init__(self,num_classes=14,out_classes=4,regressBoxes=None,clipBoxes=None,n_neurons = 11):
+        super(StyleClassificationModel, self).__init__()
+        self.in_class = num_classes
+        self.out_class = out_classes
+        self.regressBoxes = regressBoxes
+        self.clipBoxes = clipBoxes
+        self.linear = nn.Linear(num_classes,n_neurons)
+        self.out = nn.Linear(n_neurons,num_classes)
+        self.non_linear = nn.ReLU()
+        self.non_linear_out = nn.Softmax()       
+        pass
+
+    def forward(self, x, anchors, regression, img_batch):
+        transformed_anchors = self.regressBoxes(anchors, regression)
+        transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+        kept_idxs = torch.Tensor([]).long()
+        for i in range(x.shape[2]):
+            scores = torch.squeeze(x[:, :, i])
+            relevant_indices = (scores > 0.01)
+            scores = scores[relevant_indices]
+            idxs = relevant_indices.nonzero()
+            anchorBoxes = torch.squeeze(transformed_anchors)
+            anchorBoxes = anchorBoxes[relevant_indices]
+            anchors_nms_idx = nms(anchorBoxes, x, 0.5)
+            kept_idxs = torch.cat((kept_idxs,idxs[anchors_nms_idx]))
+        x = torch.squeeze(x)[torch.unique(kept_idxs)]
+        feature_vec = torch.sum(x,axis=0,keepdim=True)
+        x = self.non_linear(self.linear(feature_vec))
+        return self.non_linear_out(self.out(x)), feature_vec
 
 class ResNet(nn.Module):
 
-    def __init__(self, num_classes, block, layers):
+    def __init__(self, num_classes, block, layers, out_classes=4):
         self.inplanes = 64
         super(ResNet, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -185,6 +216,8 @@ class ResNet(nn.Module):
         self.regressBoxes = BBoxTransform()
 
         self.clipBoxes = ClipBoxes()
+
+        self.styleClassificationModel = StyleClassificationModel(num_classes, out_classes, self.regressBoxes, self.clipBoxes)
 
         self.focalLoss = losses.FocalLoss()
 
@@ -253,9 +286,9 @@ class ResNet(nn.Module):
 
         anchors = self.anchors(img_batch)
 
-        if self.training:
-            return self.focalLoss(classification, regression, anchors, annotations)
-        else:
+        style, feature_vec = self.styleClassificationModel(classification, anchors, regression, img_batch)
+
+        if not self.training:
             transformed_anchors = self.regressBoxes(anchors, regression)
             transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
 
@@ -293,8 +326,11 @@ class ResNet(nn.Module):
 
                 finalAnchorBoxesIndexes = torch.cat((finalAnchorBoxesIndexes, finalAnchorBoxesIndexesValue))
                 finalAnchorBoxesCoordinates = torch.cat((finalAnchorBoxesCoordinates, anchorBoxes[anchors_nms_idx]))
-
             return [finalScores, finalAnchorBoxesIndexes, finalAnchorBoxesCoordinates]
+
+        else:
+            return self.focalLoss(classification, regression, anchors, annotations)
+
 
 
 
@@ -327,7 +363,7 @@ def resnet50(num_classes, pretrained=False, **kwargs):
     """
     model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet50'], model_dir='.'), strict=False)
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet50'], model_dir='./models'), strict=False)
     return model
 
 

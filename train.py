@@ -23,11 +23,14 @@ print('CUDA available: {}'.format(torch.cuda.is_available()))
 def main(args=None):
     parser = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
 
-    parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.')
+    parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.',default='csv')
     parser.add_argument('--coco_path', help='Path to COCO directory')
-    parser.add_argument('--csv_train', help='Path to file containing training annotations (see readme)')
-    parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)')
-    parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)')
+    parser.add_argument('--csv_train', help='Path to file containing training annotations (see readme)', default='data/train_retinanet.csv')
+    parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)', default='data/class_retinanet.csv')
+    parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)', default='data/val_retinanet.csv')
+
+    parser.add_argument('--model_path', help='Path to file containing pretrained retinanet')
+
 
     parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
     parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
@@ -66,7 +69,7 @@ def main(args=None):
     else:
         raise ValueError('Dataset type not understood (must be csv or coco), exiting.')
 
-    sampler = AspectRatioBasedSampler(dataset_train, batch_size=2, drop_last=False)
+    sampler = AspectRatioBasedSampler(dataset_train, batch_size=1, drop_last=False)
     dataloader_train = DataLoader(dataset_train, num_workers=3, collate_fn=collater, batch_sampler=sampler)
 
     if dataset_val is not None:
@@ -97,6 +100,10 @@ def main(args=None):
         retinanet = torch.nn.DataParallel(retinanet).cuda()
     else:
         retinanet = torch.nn.DataParallel(retinanet)
+
+    if parser.model_path is not None:
+        retinanet.load_state_dict(torch.load(parser.model_path))
+        print('Pretrained model loaded!')
 
     retinanet.training = True
 
@@ -151,6 +158,7 @@ def main(args=None):
 
                 del classification_loss
                 del regression_loss
+                return 0
             except Exception as e:
                 print(e)
                 continue

@@ -42,6 +42,7 @@ def detect_image(image_path, model_path, class_list):
         labels[value] = key
 
     model = torch.load(model_path)
+    print(model)
 
     if torch.cuda.is_available():
         model = model.cuda()
@@ -98,7 +99,7 @@ def detect_image(image_path, model_path, class_list):
             print(image.shape, image_orig.shape, scale)
             scores, classification, transformed_anchors = model(image.cuda().float())
             print('Elapsed time: {}'.format(time.time() - st))
-            idxs = np.where(scores.cpu() > 0.5)
+            idxs = np.where(scores.cpu() > 0.005)
 
             for j in range(idxs[0].shape[0]):
                 bbox = transformed_anchors[idxs[0][j], :]
@@ -109,7 +110,7 @@ def detect_image(image_path, model_path, class_list):
                 y2 = int(bbox[3] / scale)
                 label_name = labels[int(classification[idxs[0][j]])]
                 print(bbox, classification.shape)
-                score = scores[j]
+                score = scores[idxs[0][j]]
                 caption = '{} {:.3f}'.format(label_name, score)
                 # draw_caption(img, (x1, y1, x2, y2), label_name)
                 draw_caption(image_orig, (x1, y1, x2, y2), caption)
@@ -123,9 +124,9 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Simple script for visualizing result of training.')
 
-    parser.add_argument('--image_dir', help='Path to directory containing images')
-    parser.add_argument('--model_path', help='Path to model')
-    parser.add_argument('--class_list', help='Path to CSV file listing class names (see README)')
+    parser.add_argument('--image_dir', help='Path to directory containing images',default="images")
+    parser.add_argument('--model_path', help='Path to model',default='trained_models/csv_retinanet_50.pt')
+    parser.add_argument('--class_list', help='Path to CSV file listing class names (see README)',default='data/class_retinanet.csv')
 
     parser = parser.parse_args()
 

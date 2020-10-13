@@ -203,7 +203,8 @@ class CSVDataset(Dataset):
 
         img = self.load_image(idx)
         annot = self.load_annotations(idx)
-        sample = {'img': img, 'annot': annot}
+        style = self.get_style(idx)
+        sample = {'img': img, 'annot': annot, 'style': style}
         if self.transform:
             sample = self.transform(sample)
 
