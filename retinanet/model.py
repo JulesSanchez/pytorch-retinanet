@@ -160,7 +160,7 @@ class StyleClassificationModel(nn.Module):
         self.regressBoxes = regressBoxes
         self.clipBoxes = clipBoxes
         self.linear = nn.Linear(num_classes,n_neurons)
-        self.out = nn.Linear(n_neurons,num_classes)
+        self.out = nn.Linear(n_neurons,out_classes)
         self.non_linear = nn.ReLU()
         self.non_linear_out = nn.Softmax()       
         pass
@@ -168,20 +168,23 @@ class StyleClassificationModel(nn.Module):
     def forward(self, x, anchors, regression, img_batch):
         transformed_anchors = self.regressBoxes(anchors, regression)
         transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
-        kept_idxs = torch.Tensor([]).long()
+        kept_idxs = torch.Tensor([]).long().cuda()
         for i in range(x.shape[2]):
             scores = torch.squeeze(x[:, :, i])
             relevant_indices = (scores > 0.01)
+            if relevant_indices.sum() == 0:
+                 # no boxes to NMS, just continue
+                continue
             scores = scores[relevant_indices]
             idxs = relevant_indices.nonzero()
             anchorBoxes = torch.squeeze(transformed_anchors)
             anchorBoxes = anchorBoxes[relevant_indices]
-            anchors_nms_idx = nms(anchorBoxes, x, 0.5)
+            anchors_nms_idx = nms(anchorBoxes, scores, 0.5)
             kept_idxs = torch.cat((kept_idxs,idxs[anchors_nms_idx]))
         x = torch.squeeze(x)[torch.unique(kept_idxs)]
         feature_vec = torch.sum(x,axis=0,keepdim=True)
         x = self.non_linear(self.linear(feature_vec))
-        return self.non_linear_out(self.out(x)), feature_vec
+        return self.out(x), feature_vec
 
 class ResNet(nn.Module):
 
@@ -216,6 +219,10 @@ class ResNet(nn.Module):
         self.regressBoxes = BBoxTransform()
 
         self.clipBoxes = ClipBoxes()
+
+        self.style_training = False
+
+        self.style_inference = False
 
         self.styleClassificationModel = StyleClassificationModel(num_classes, out_classes, self.regressBoxes, self.clipBoxes)
 
@@ -260,6 +267,63 @@ class ResNet(nn.Module):
         for layer in self.modules():
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
+    
+    def style_train(self, to_train=True):
+        self.style_training = to_train 
+
+        if self.style_training:
+
+            for param in self.styleClassificationModel.parameters():
+                param.requires_grad = True
+
+            for param in self.classificationModel.parameters():
+                param.requires_grad = False
+
+            for param in self.regressionModel.parameters():
+                param.requires_grad = False
+
+            for param in self.fpn.parameters():
+                param.requires_grad = False
+
+            for param in self.conv1.parameters():
+                param.requires_grad = False
+            for param in self.bn1.parameters():
+                param.requires_grad = False
+            for param in self.layer1.parameters():
+                param.requires_grad = False
+            for param in self.layer2.parameters():
+                param.requires_grad = False
+            for param in self.layer3.parameters():
+                param.requires_grad = False
+            for param in self.layer4.parameters():
+                param.requires_grad = False
+        
+        if not self.style_training:
+
+            for param in self.styleClassificationModel.parameters():
+                param.requires_grad = False
+
+            for param in self.classificationModel.parameters():
+                param.requires_grad = True
+
+            for param in self.regressionModel.parameters():
+                param.requires_grad = True
+
+            for param in self.fpn.parameters():
+                param.requires_grad = True
+
+            for param in self.conv1.parameters():
+                param.requires_grad = True
+            for param in self.bn1.parameters():
+                param.requires_grad = True
+            for param in self.layer1.parameters():
+                param.requires_grad = True
+            for param in self.layer2.parameters():
+                param.requires_grad = True
+            for param in self.layer3.parameters():
+                param.requires_grad = True
+            for param in self.layer4.parameters():
+                param.requires_grad = True            
 
     def forward(self, inputs):
 
@@ -286,7 +350,11 @@ class ResNet(nn.Module):
 
         anchors = self.anchors(img_batch)
 
-        style, feature_vec = self.styleClassificationModel(classification, anchors, regression, img_batch)
+        if not self.style_training and not self.style_inference:
+            style = torch.Tensor([[0,0,0,0]]).cuda()
+        else:
+            style, feature_vec = self.styleClassificationModel(classification, anchors, regression, img_batch)
+
 
         if not self.training:
             transformed_anchors = self.regressBoxes(anchors, regression)
@@ -326,10 +394,14 @@ class ResNet(nn.Module):
 
                 finalAnchorBoxesIndexes = torch.cat((finalAnchorBoxesIndexes, finalAnchorBoxesIndexesValue))
                 finalAnchorBoxesCoordinates = torch.cat((finalAnchorBoxesCoordinates, anchorBoxes[anchors_nms_idx]))
-            return [finalScores, finalAnchorBoxesIndexes, finalAnchorBoxesCoordinates]
+            
+            if self.style_inference:
+                return [finalScores, finalAnchorBoxesIndexes, finalAnchorBoxesCoordinates], torch.softmax(style,dim=1), feature_vec
+            else:
+                return [finalScores, finalAnchorBoxesIndexes, finalAnchorBoxesCoordinates], torch.softmax(style,dim=1)
 
         else:
-            return self.focalLoss(classification, regression, anchors, annotations)
+            return self.focalLoss(classification, regression, anchors, annotations), style
 
 
 

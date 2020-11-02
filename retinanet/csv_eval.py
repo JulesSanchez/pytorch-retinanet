@@ -5,7 +5,7 @@ import json
 import os
 
 import torch
-
+from sklearn import metrics
 
 
 def compute_overlap(a, b):
@@ -76,6 +76,7 @@ def _get_detections(dataset, retinanet, score_threshold=0.05, max_detections=100
         A list of lists containing the detections for each image in the generator.
     """
     all_detections = [[None for i in range(dataset.num_classes())] for j in range(len(dataset))]
+    all_styles = []
 
     retinanet.eval()
     
@@ -87,12 +88,15 @@ def _get_detections(dataset, retinanet, score_threshold=0.05, max_detections=100
 
             # run network
             if torch.cuda.is_available():
-                scores, labels, boxes = retinanet(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0))
+                [scores, labels, boxes], style = retinanet(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0))
             else:
-                scores, labels, boxes = retinanet(data['img'].permute(2, 0, 1).float().unsqueeze(dim=0))
+                [scores, labels, boxes], style = retinanet(data['img'].permute(2, 0, 1).float().unsqueeze(dim=0))
             scores = scores.cpu().numpy()
             labels = labels.cpu().numpy()
             boxes  = boxes.cpu().numpy()
+            style = style.cpu().numpy()
+            
+            all_styles.append(np.argmax(style))
 
             # correct boxes for image scale
             boxes /= scale
@@ -122,7 +126,7 @@ def _get_detections(dataset, retinanet, score_threshold=0.05, max_detections=100
 
             print('{}/{}'.format(index + 1, len(dataset)), end='\r')
 
-    return all_detections
+    return all_detections, all_styles
 
 
 def _get_annotations(generator):
@@ -135,10 +139,12 @@ def _get_annotations(generator):
         A list of lists containing the annotations for each image in the generator.
     """
     all_annotations = [[None for i in range(generator.num_classes())] for j in range(len(generator))]
+    all_styles = []
 
     for i in range(len(generator)):
         # load the annotations
-        annotations = generator.load_annotations(i)
+        annotations, style = generator.load_annotations(i)
+        all_styles.append(style)
 
         # copy detections to all_annotations
         for label in range(generator.num_classes()):
@@ -146,7 +152,7 @@ def _get_annotations(generator):
 
         print('{}/{}'.format(i + 1, len(generator)), end='\r')
 
-    return all_annotations
+    return all_annotations, all_styles
 
 
 def evaluate(
@@ -173,8 +179,8 @@ def evaluate(
 
     # gather all detections and annotations
 
-    all_detections     = _get_detections(generator, retinanet, score_threshold=score_threshold, max_detections=max_detections, save_path=save_path)
-    all_annotations    = _get_annotations(generator)
+    all_detections, all_styles     = _get_detections(generator, retinanet, score_threshold=score_threshold, max_detections=max_detections, save_path=save_path)
+    all_annotations, true_styles   = _get_annotations(generator)
 
     average_precisions = {}
 
@@ -236,6 +242,55 @@ def evaluate(
     for label in range(generator.num_classes()):
         label_name = generator.label_to_name(label)
         print('{}: {}'.format(label_name, average_precisions[label][0]))
+
+
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(true_styles,all_styles)
+    STYLES_HOTONE_ENCODE = {'M' : 0, 'G' : 1, 'R' : 2, 'B' : 3}
+    from sklearn.metrics import ConfusionMatrixDisplay
+    import matplotlib.pyplot as plt 
+
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm,
+                                    display_labels=STYLES_HOTONE_ENCODE.keys())
+    disp.plot(include_values=True, cmap='viridis')
+    plt.savefig('confmat.png')
+    print(metrics.classification_report(true_styles, all_styles, digits=3))
     
     return average_precisions
 
+import shap
+
+def shap_eval(model, train_loader, test_loader):
+    classifier = model.module.styleClassificationModel
+    classifier.eval()
+    model.module.style_inference = True
+    from scipy.special import softmax
+    def predict(feature_vec):
+        res = []
+        for el in feature_vec:
+            partial_res = classifier.out(classifier.non_linear(classifier.linear(torch.tensor(el).cuda()))).detach().cpu().numpy()
+            res.append(softmax(partial_res))
+        return np.array(res)
+    train_data = []
+    test_data = []
+    for index in range(len(train_loader)):
+        data = train_loader[index]
+        [_,_,_], style, feature_vec = model(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0))
+        train_data.append(feature_vec.detach().cpu().numpy())
+    for index in range(len(test_loader)):
+        data = test_loader[index]
+        [_,_,_], style, feature_vec = model(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0))
+        test_data.append(feature_vec.detach().cpu().numpy())
+        pred = predict(test_data[index])
+    train_data = np.array(train_data)
+    test_data = np.array(test_data)
+    train_data = np.squeeze(train_data)
+    test_data = np.squeeze(test_data)
+    elements = np.random.choice(len(train_data), int(0.3*len(train_data)), False)
+    explainer = shap.KernelExplainer(predict, train_data[elements])
+    shap_values_test = explainer.shap_values(test_data, nsamples=30, l1_reg='bic')
+    import sys
+    sys.path.append("../architectural_style_classification")
+    from utils.knowledge_graph import GED_metric
+    d = GED_metric(test_data, shap_values_test, dataset='MonumenAI')
+    print(d)

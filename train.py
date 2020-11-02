@@ -4,6 +4,7 @@ import collections
 import numpy as np
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 from torchvision import transforms
 
@@ -92,6 +93,10 @@ def main(args=None):
 
     use_gpu = True
 
+    if parser.model_path is not None:
+        retinanet = torch.load(parser.model_path)
+        print('Pretrained model loaded!')
+
     if use_gpu:
         if torch.cuda.is_available():
             retinanet = retinanet.cuda()
@@ -101,26 +106,30 @@ def main(args=None):
     else:
         retinanet = torch.nn.DataParallel(retinanet)
 
-    if parser.model_path is not None:
-        retinanet.load_state_dict(torch.load(parser.model_path))
-        print('Pretrained model loaded!')
-
     retinanet.training = True
+
 
     optimizer = optim.Adam(retinanet.parameters(), lr=1e-5)
 
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=4, verbose=True)
 
     loss_hist = collections.deque(maxlen=500)
+
+    loss_style_classif = nn.CrossEntropyLoss()
 
     retinanet.train()
     retinanet.module.freeze_bn()
 
     print('Num training images: {}'.format(len(dataset_train)))
 
-    for epoch_num in range(parser.epochs):
+    for epoch_num in range(33,50):
 
         retinanet.train()
+        # if epoch_num%10 == 0:
+        #     retinanet.module.style_train(False)
+        # else:
+        #     retinanet.module.style_train(True)
+
         retinanet.module.freeze_bn()
 
         epoch_loss = []
@@ -130,14 +139,18 @@ def main(args=None):
                 optimizer.zero_grad()
 
                 if torch.cuda.is_available():
-                    classification_loss, regression_loss = retinanet([data['img'].cuda().float(), data['annot']])
+                    [classification_loss, regression_loss], style = retinanet([data['img'].cuda().float(), data['annot']])
                 else:
-                    classification_loss, regression_loss = retinanet([data['img'].float(), data['annot']])
+                    [classification_loss, regression_loss], style = retinanet([data['img'].float(), data['annot']])
                     
                 classification_loss = classification_loss.mean()
                 regression_loss = regression_loss.mean()
+                if torch.cuda.is_available():
+                    style_loss = loss_style_classif(style,torch.tensor(data['style']).cuda())
+                else:
+                    style_loss = loss_style_classif(style,torch.tensor(data['style']))
 
-                loss = classification_loss + regression_loss
+                loss = classification_loss + regression_loss + style_loss
 
                 if bool(loss == 0):
                     continue
@@ -153,12 +166,12 @@ def main(args=None):
                 epoch_loss.append(float(loss))
 
                 print(
-                    'Epoch: {} | Iteration: {} | Classification loss: {:1.5f} | Regression loss: {:1.5f} | Running loss: {:1.5f}'.format(
-                        epoch_num, iter_num, float(classification_loss), float(regression_loss), np.mean(loss_hist)))
+                    'Epoch: {} | Iteration: {} | Classification loss: {:1.4f} | Regression loss: {:1.4f} | Style loss: {:1.4f} | Running loss: {:1.4f}'.format(
+                        epoch_num, iter_num, float(classification_loss), float(regression_loss), float(style_loss), np.mean(loss_hist)))
 
                 del classification_loss
                 del regression_loss
-                return 0
+                del style_loss
             except Exception as e:
                 print(e)
                 continue
@@ -182,6 +195,91 @@ def main(args=None):
     retinanet.eval()
 
     torch.save(retinanet, 'model_final.pt')
+
+    retinanet.module.style_train(True)
+
+    optimizer = optim.Adam(retinanet.parameters(), lr=1e-3)
+
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=4, verbose=True)
+
+    loss_hist = collections.deque(maxlen=500)
+
+    loss_style_classif = nn.CrossEntropyLoss()
+    retinanet.train()
+    retinanet.module.freeze_bn()
+
+    print('Num training images: {}'.format(len(dataset_train)))
+
+    for epoch_num in range(50,parser.epochs):
+
+        retinanet.train()
+
+        retinanet.module.freeze_bn()
+
+        epoch_loss = []
+
+        for iter_num, data in enumerate(dataloader_train):
+            try:
+                optimizer.zero_grad()
+
+                if torch.cuda.is_available():
+                    [classification_loss, regression_loss], style = retinanet([data['img'].cuda().float(), data['annot']])
+                else:
+                    [classification_loss, regression_loss], style = retinanet([data['img'].float(), data['annot']])
+                    
+                classification_loss = classification_loss.mean()
+                regression_loss = regression_loss.mean()
+                if torch.cuda.is_available():
+                    style_loss = loss_style_classif(style,torch.tensor(data['style']).cuda())
+                else:
+                    style_loss = loss_style_classif(style,torch.tensor(data['style']))
+
+                loss = classification_loss + regression_loss + style_loss
+
+                if bool(loss == 0):
+                    continue
+
+                loss.backward()
+
+                torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
+
+                optimizer.step()
+
+                loss_hist.append(float(loss))
+
+                epoch_loss.append(float(loss))
+
+                print(
+                    'Epoch: {} | Iteration: {} | Classification loss: {:1.4f} | Regression loss: {:1.4f} | Style loss: {:1.4f} | Running loss: {:1.4f}'.format(
+                        epoch_num, iter_num, float(classification_loss), float(regression_loss), float(style_loss), np.mean(loss_hist)))
+
+                del classification_loss
+                del regression_loss
+                del style_loss
+            except Exception as e:
+                print(e)
+                continue
+
+        if parser.dataset == 'coco':
+
+            print('Evaluating dataset')
+
+            coco_eval.evaluate_coco(dataset_val, retinanet)
+
+        elif parser.dataset == 'csv' and parser.csv_val is not None:
+
+            print('Evaluating dataset')
+
+            mAP = csv_eval.evaluate(dataset_val, retinanet)
+
+        scheduler.step(np.mean(epoch_loss))
+
+        torch.save(retinanet.module, '{}_retinanet_{}.pt'.format(parser.dataset, epoch_num))
+
+    retinanet.eval()
+
+    torch.save(retinanet, 'model_final.pt')
+
 
 
 if __name__ == '__main__':

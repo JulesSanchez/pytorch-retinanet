@@ -202,13 +202,23 @@ class CSVDataset(Dataset):
     def __getitem__(self, idx):
 
         img = self.load_image(idx)
-        annot = self.load_annotations(idx)
-        style = self.get_style(idx)
-        sample = {'img': img, 'annot': annot, 'style': style}
+        annot, style = self.load_annotations(idx)
+        sample = {'img': img, 'annot': annot}
         if self.transform:
             sample = self.transform(sample)
-
+        sample['style'] = style
         return sample
+
+    def get_style(self, image_index):
+        style = self.image_names[image_index].split('/')[-2]
+        if style == "01.musulman":
+            return 0
+        if style == "02.gotico":
+            return 1        
+        if style == "03.renacentista":
+            return 2
+        if style == "04.barroco":
+            return 3
 
     def load_image(self, image_index):
         img = skimage.io.imread(self.image_names[image_index])
@@ -248,7 +258,7 @@ class CSVDataset(Dataset):
             annotation[0, 4]  = self.name_to_label(a['class'])
             annotations       = np.append(annotations, annotation, axis=0)
 
-        return annotations
+        return annotations, self.get_style(image_index)
 
     def _read_annotations(self, csv_reader, classes):
         result = {}
@@ -304,6 +314,7 @@ def collater(data):
     imgs = [s['img'] for s in data]
     annots = [s['annot'] for s in data]
     scales = [s['scale'] for s in data]
+    style = [s['style'] for s in data]
         
     widths = [int(s.shape[0]) for s in imgs]
     heights = [int(s.shape[1]) for s in imgs]
@@ -335,7 +346,7 @@ def collater(data):
 
     padded_imgs = padded_imgs.permute(0, 3, 1, 2)
 
-    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales}
+    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'style':style}
 
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
