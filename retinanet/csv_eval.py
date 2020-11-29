@@ -259,7 +259,7 @@ def evaluate(
     return average_precisions
 
 import shap
-
+#added support for GED computation. Can be used as building block to incorporate SHAP backprop.
 def shap_eval(model, train_loader, test_loader):
     classifier = model.module.styleClassificationModel
     classifier.eval()

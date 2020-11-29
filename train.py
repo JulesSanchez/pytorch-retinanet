@@ -34,7 +34,8 @@ def main(args=None):
 
 
     parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
-    parser.add_argument('--epochs', help='Number of epochs', type=int, default=100)
+    parser.add_argument('--epochs_detection', help='Number of epochs for detection', type=int, default=100)
+    parser.add_argument('--epochs_classification', help='Number of epochs for classification', type=int, default=50)
 
     parser = parser.parse_args(args)
 
@@ -106,15 +107,13 @@ def main(args=None):
     else:
         retinanet = torch.nn.DataParallel(retinanet)
 
+
+    #Here training the detection
     retinanet.training = True
 
-
     optimizer = optim.Adam(retinanet.parameters(), lr=1e-5)
-
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=4, verbose=True)
-
     loss_hist = collections.deque(maxlen=500)
-
     loss_style_classif = nn.CrossEntropyLoss()
 
     retinanet.train()
@@ -122,14 +121,9 @@ def main(args=None):
 
     print('Num training images: {}'.format(len(dataset_train)))
 
-    for epoch_num in range(33,50):
+    for epoch_num in range(parser.epochs_detection):
 
         retinanet.train()
-        # if epoch_num%10 == 0:
-        #     retinanet.module.style_train(False)
-        # else:
-        #     retinanet.module.style_train(True)
-
         retinanet.module.freeze_bn()
 
         epoch_loss = []
@@ -149,20 +143,15 @@ def main(args=None):
                     style_loss = loss_style_classif(style,torch.tensor(data['style']).cuda())
                 else:
                     style_loss = loss_style_classif(style,torch.tensor(data['style']))
-
                 loss = classification_loss + regression_loss + style_loss
 
                 if bool(loss == 0):
                     continue
 
                 loss.backward()
-
                 torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
-
                 optimizer.step()
-
                 loss_hist.append(float(loss))
-
                 epoch_loss.append(float(loss))
 
                 print(
@@ -177,45 +166,33 @@ def main(args=None):
                 continue
 
         if parser.dataset == 'coco':
-
             print('Evaluating dataset')
-
             coco_eval.evaluate_coco(dataset_val, retinanet)
 
         elif parser.dataset == 'csv' and parser.csv_val is not None:
-
             print('Evaluating dataset')
-
             mAP = csv_eval.evaluate(dataset_val, retinanet)
 
         scheduler.step(np.mean(epoch_loss))
-
         torch.save(retinanet.module, '{}_retinanet_{}.pt'.format(parser.dataset, epoch_num))
 
     retinanet.eval()
-
     torch.save(retinanet, 'model_final.pt')
 
+    #Here begins Style training. Need to set to style_train. They are using the same loader, as it was expected to train both at the same time.
+
     retinanet.module.style_train(True)
-
     optimizer = optim.Adam(retinanet.parameters(), lr=1e-3)
-
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=4, verbose=True)
-
     loss_hist = collections.deque(maxlen=500)
-
     loss_style_classif = nn.CrossEntropyLoss()
     retinanet.train()
     retinanet.module.freeze_bn()
 
-    print('Num training images: {}'.format(len(dataset_train)))
-
-    for epoch_num in range(50,parser.epochs):
+    for epoch_num in range(parser.epochs_classification):
 
         retinanet.train()
-
         retinanet.module.freeze_bn()
-
         epoch_loss = []
 
         for iter_num, data in enumerate(dataloader_train):
@@ -240,13 +217,9 @@ def main(args=None):
                     continue
 
                 loss.backward()
-
                 torch.nn.utils.clip_grad_norm_(retinanet.parameters(), 0.1)
-
                 optimizer.step()
-
                 loss_hist.append(float(loss))
-
                 epoch_loss.append(float(loss))
 
                 print(
@@ -261,23 +234,17 @@ def main(args=None):
                 continue
 
         if parser.dataset == 'coco':
-
             print('Evaluating dataset')
-
             coco_eval.evaluate_coco(dataset_val, retinanet)
 
         elif parser.dataset == 'csv' and parser.csv_val is not None:
-
             print('Evaluating dataset')
-
             mAP = csv_eval.evaluate(dataset_val, retinanet)
 
         scheduler.step(np.mean(epoch_loss))
-
         torch.save(retinanet.module, '{}_retinanet_{}.pt'.format(parser.dataset, epoch_num))
 
     retinanet.eval()
-
     torch.save(retinanet, 'model_final.pt')
 
 

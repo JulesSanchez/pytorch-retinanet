@@ -102,5 +102,4 @@ ENV/
 *.zip
 *.pt
 *.python
-*.csv
 *.pth

@@ -152,7 +152,7 @@ class ClassificationModel(nn.Module):
         return out2.contiguous().view(x.shape[0], -1, self.num_classes)
 
 class StyleClassificationModel(nn.Module):
-
+    #New module added for macro classification.
     def __init__(self,num_classes=14,out_classes=4,regressBoxes=None,clipBoxes=None,n_neurons = 11):
         super(StyleClassificationModel, self).__init__()
         self.in_class = num_classes
@@ -220,8 +220,8 @@ class ResNet(nn.Module):
 
         self.clipBoxes = ClipBoxes()
 
+        #Flags to know if training/inference object classification
         self.style_training = False
-
         self.style_inference = False
 
         self.styleClassificationModel = StyleClassificationModel(num_classes, out_classes, self.regressBoxes, self.clipBoxes)
@@ -267,7 +267,7 @@ class ResNet(nn.Module):
         for layer in self.modules():
             if isinstance(layer, nn.BatchNorm2d):
                 layer.eval()
-    
+    #Function to change what layers to train. Either part detection or object classification
     def style_train(self, to_train=True):
         self.style_training = to_train 
 
@@ -394,12 +394,11 @@ class ResNet(nn.Module):
 
                 finalAnchorBoxesIndexes = torch.cat((finalAnchorBoxesIndexes, finalAnchorBoxesIndexesValue))
                 finalAnchorBoxesCoordinates = torch.cat((finalAnchorBoxesCoordinates, anchorBoxes[anchors_nms_idx]))
-            
+            #Here require the feature vec to compute SHAP on it for GED or for SHAP backprop
             if self.style_inference:
                 return [finalScores, finalAnchorBoxesIndexes, finalAnchorBoxesCoordinates], torch.softmax(style,dim=1), feature_vec
             else:
                 return [finalScores, finalAnchorBoxesIndexes, finalAnchorBoxesCoordinates], torch.softmax(style,dim=1)
-
         else:
             return self.focalLoss(classification, regression, anchors, annotations), style
 
