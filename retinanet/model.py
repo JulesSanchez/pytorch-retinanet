@@ -123,7 +123,7 @@ class ClassificationModel(nn.Module):
         self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
         self.act4 = nn.ReLU()
 
-        self.output = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
+        self.output_new = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
         self.output_act = nn.Sigmoid()
 
     def forward(self, x):
@@ -139,7 +139,7 @@ class ClassificationModel(nn.Module):
         out = self.conv4(out)
         out = self.act4(out)
 
-        out = self.output(out)
+        out = self.output_new(out)
         out = self.output_act(out)
 
         # out is B x C x W x H, with C = n_classes + n_anchors
@@ -162,29 +162,34 @@ class StyleClassificationModel(nn.Module):
         self.linear = nn.Linear(num_classes,n_neurons)
         self.out = nn.Linear(n_neurons,out_classes)
         self.non_linear = nn.ReLU()
-        self.non_linear_out = nn.Softmax()       
+        self.non_linear_out = nn.Softmax()
         pass
 
-    def forward(self, x, anchors, regression, img_batch):
-        transformed_anchors = self.regressBoxes(anchors, regression)
-        transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
-        kept_idxs = torch.Tensor([]).long().cuda()
-        for i in range(x.shape[2]):
-            scores = torch.squeeze(x[:, :, i])
-            relevant_indices = (scores > 0.01)
-            if relevant_indices.sum() == 0:
-                 # no boxes to NMS, just continue
-                continue
-            scores = scores[relevant_indices]
-            idxs = relevant_indices.nonzero()
-            anchorBoxes = torch.squeeze(transformed_anchors)
-            anchorBoxes = anchorBoxes[relevant_indices]
-            anchors_nms_idx = nms(anchorBoxes, scores, 0.5)
-            kept_idxs = torch.cat((kept_idxs,idxs[anchors_nms_idx]))
-        x = torch.squeeze(x)[torch.unique(kept_idxs)]
-        feature_vec = torch.sum(x,axis=0,keepdim=True)
-        x = self.non_linear(self.linear(feature_vec))
-        return self.out(x), feature_vec
+    def forward(self, x, anchors, regression, img_batch,simple=False):
+        if simple==False:
+            transformed_anchors = self.regressBoxes(anchors, regression)
+            transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+            kept_idxs = torch.Tensor([]).long().cuda()
+            for i in range(x.shape[2]):
+                scores = torch.squeeze(x[:, :, i])
+                relevant_indices = (scores > 0.01)
+                if relevant_indices.sum() == 0:
+                     # no boxes to NMS, just continue
+                    continue
+                scores = scores[relevant_indices]
+                idxs = relevant_indices.nonzero()
+                anchorBoxes = torch.squeeze(transformed_anchors)
+                anchorBoxes = anchorBoxes[relevant_indices]
+                anchors_nms_idx = nms(anchorBoxes, scores, 0.5)
+                kept_idxs = torch.cat((kept_idxs,idxs[anchors_nms_idx]))
+            x = torch.squeeze(x)[torch.unique(kept_idxs)]
+            feature_vec = torch.sum(x,axis=0,keepdim=True)
+            x = self.non_linear(self.linear(feature_vec))
+            return self.out(x), feature_vec
+        else:
+            x = self.non_linear(self.linear(x))
+            return self.out(x)
+
 
 class ResNet(nn.Module):
 
@@ -199,7 +204,7 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-
+        self.out_classes = out_classes
         if block == BasicBlock:
             fpn_sizes = [self.layer2[layers[1] - 1].conv2.out_channels, self.layer3[layers[2] - 1].conv2.out_channels,
                          self.layer4[layers[3] - 1].conv2.out_channels]
@@ -223,9 +228,7 @@ class ResNet(nn.Module):
         #Flags to know if training/inference object classification
         self.style_training = False
         self.style_inference = False
-
         self.styleClassificationModel = StyleClassificationModel(num_classes, out_classes, self.regressBoxes, self.clipBoxes)
-
         self.focalLoss = losses.FocalLoss()
 
         for m in self.modules():
@@ -238,8 +241,8 @@ class ResNet(nn.Module):
 
         prior = 0.01
 
-        self.classificationModel.output.weight.data.fill_(0)
-        self.classificationModel.output.bias.data.fill_(-math.log((1.0 - prior) / prior))
+        self.classificationModel.output_new.weight.data.fill_(0)
+        self.classificationModel.output_new.bias.data.fill_(-math.log((1.0 - prior) / prior))
 
         self.regressionModel.output.weight.data.fill_(0)
         self.regressionModel.output.bias.data.fill_(0)
@@ -269,7 +272,7 @@ class ResNet(nn.Module):
                 layer.eval()
     #Function to change what layers to train. Either part detection or object classification
     def style_train(self, to_train=True):
-        self.style_training = to_train 
+        self.style_training = to_train
 
         if self.style_training:
 
@@ -297,7 +300,7 @@ class ResNet(nn.Module):
                 param.requires_grad = False
             for param in self.layer4.parameters():
                 param.requires_grad = False
-        
+
         if not self.style_training:
 
             for param in self.styleClassificationModel.parameters():
@@ -323,7 +326,7 @@ class ResNet(nn.Module):
             for param in self.layer3.parameters():
                 param.requires_grad = True
             for param in self.layer4.parameters():
-                param.requires_grad = True            
+                param.requires_grad = True
 
     def forward(self, inputs):
 
@@ -351,7 +354,7 @@ class ResNet(nn.Module):
         anchors = self.anchors(img_batch)
 
         if not self.style_training and not self.style_inference:
-            style = torch.Tensor([[0,0,0,0]]).cuda()
+            style = torch.zeros(1,self.out_classes).cuda()
         else:
             style, feature_vec = self.styleClassificationModel(classification, anchors, regression, img_batch)
 
@@ -405,56 +408,56 @@ class ResNet(nn.Module):
 
 
 
-def resnet18(num_classes, pretrained=False, **kwargs):
+def resnet18(num_classes, pretrained=False,out_classes=4, **kwargs):
     """Constructs a ResNet-18 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, BasicBlock, [2, 2, 2, 2], **kwargs)
+    model = ResNet(num_classes, BasicBlock, [2, 2, 2, 2], out_classes, **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet18'], model_dir='.'), strict=False)
     return model
 
 
-def resnet34(num_classes, pretrained=False, **kwargs):
+def resnet34(num_classes, pretrained=False,out_classes=4, **kwargs):
     """Constructs a ResNet-34 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, BasicBlock, [3, 4, 6, 3], **kwargs)
+    model = ResNet(num_classes, BasicBlock, [3, 4, 6, 3], out_classes, **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet34'], model_dir='.'), strict=False)
     return model
 
 
-def resnet50(num_classes, pretrained=False, **kwargs):
+def resnet50(num_classes, pretrained=False,out_classes=4, **kwargs):
     """Constructs a ResNet-50 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], out_classes, **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet50'], model_dir='./models'), strict=False)
     return model
 
 
-def resnet101(num_classes, pretrained=False, **kwargs):
+def resnet101(num_classes, pretrained=False,out_classes=4, **kwargs):
     """Constructs a ResNet-101 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = ResNet(num_classes, Bottleneck, [3, 4, 23, 3], out_classes, **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet101'], model_dir='.'), strict=False)
     return model
 
 
-def resnet152(num_classes, pretrained=False, **kwargs):
+def resnet152(num_classes, pretrained=False,out_classes=4, **kwargs):
     """Constructs a ResNet-152 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(num_classes, Bottleneck, [3, 8, 36, 3], **kwargs)
+    model = ResNet(num_classes, Bottleneck, [3, 8, 36, 3], out_classes, **kwargs)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet152'], model_dir='.'), strict=False)
     return model

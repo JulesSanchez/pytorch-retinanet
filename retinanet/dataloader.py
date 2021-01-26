@@ -134,9 +134,11 @@ class CSVDataset(Dataset):
             test_file (string, optional): CSV file with testing annotations
         """
         self.train_file = train_file
+        self.set_name = 'MonuAI'
         self.class_list = class_list
         self.transform = transform
-
+        self.dico_labels = { 1:'arco-herradura', 2:'dintel-adovelado', 3:'arco-lobulado', 4:'arco-medio-punto',5:'arco-apuntado',6:'vano-adintelado',7:'fronton', 8:'arco-conopial',9:'arco-trilobulado',10:'serliana',11:'ojo-de-buey',12:'fronton-curvo', 13:'fronton-partido', 14:'columna-salomonica'}
+        self.dico_labelcocostyle=[{'supercategory': 'arco-herradura', 'id': 1, 'name': 'arco-herradura'},{'supercategory': 'dintel-adovelado', 'id': 2, 'name': 'dintel-adovelado'},{'supercategory': 'arco-lobulado', 'id': 3, 'name': 'arco-lobulado'},{'supercategory': 'arco-medio-punto', 'id': 4, 'name': 'arco-medio-punto'},{'supercategory': 'arco-apuntado', 'id': 5, 'name': 'arco-apuntado'},{'supercategory': 'vano-adintelado', 'id': 6, 'name': 'vano-adintelado'},{'supercategory': 'fronton', 'id': 7, 'name': 'fronton'},{'supercategory': 'arco-conopial', 'id': 8, 'name': 'arco-conopial'},{'supercategory': 'arco-trilobulado', 'id': 9, 'name': 'arco-trilobulado'},{'supercategory': 'serliana', 'id': 10, 'name': 'serliana'},{'supercategory': 'ojo-de-buey', 'id': 11, 'name': 'ojo-de-buey'},{'supercategory': 'fronton-curvo', 'id': 12, 'name': 'fronton-curvo'},{'supercategory': 'fronton-partido', 'id': 13, 'name': 'fronton-partido'},{'supercategory': 'columna-salomonica', 'id': 14, 'name': 'columna-salomonica'}]
         # parse the provided class file
         try:
             with self._open_for_csv(self.class_list) as file:
@@ -297,6 +299,9 @@ class CSVDataset(Dataset):
 
     def name_to_label(self, name):
         return self.classes[name]
+
+    def label_to_converter(self, label):
+        return self.dico_labels[label]
 
     def label_to_name(self, label):
         return self.labels[label]

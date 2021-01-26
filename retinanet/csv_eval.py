@@ -238,12 +238,14 @@ def evaluate(
         average_precision  = _compute_ap(recall, precision)
         average_precisions[label] = average_precision, num_annotations
     
-    print('\nmAP:')
+    print('\nmAP all classses:')
+    mAP=0
     for label in range(generator.num_classes()):
         label_name = generator.label_to_name(label)
         print('{}: {}'.format(label_name, average_precisions[label][0]))
-
-
+        mAP+=average_precisions[label][0]
+    print('\nmAP:',mAP/float((generator.num_classes())) )
+    
     from sklearn.metrics import confusion_matrix
     cm = confusion_matrix(true_styles,all_styles)
     STYLES_HOTONE_ENCODE = {'M' : 0, 'G' : 1, 'R' : 2, 'B' : 3}
@@ -255,16 +257,20 @@ def evaluate(
     disp.plot(include_values=True, cmap='viridis')
     plt.savefig('confmat.png')
     print(metrics.classification_report(true_styles, all_styles, digits=3))
-    
-    return average_precisions
+    accu=metrics.accuracy_score(true_styles, all_styles)
+
+    return average_precisions,mAP/float((generator.num_classes())),accu
 
 import shap
 #added support for GED computation. Can be used as building block to incorporate SHAP backprop.
-def shap_eval(model, train_loader, test_loader):
+def shap_eval(model, train_loader, test_loader,data_set='MonuAI'):
     classifier = model.module.styleClassificationModel
     classifier.eval()
     model.module.style_inference = True
+
     from scipy.special import softmax
+    #except : from sklearn.utils.extmath import softmax
+
     def predict(feature_vec):
         res = []
         for el in feature_vec:
@@ -292,5 +298,9 @@ def shap_eval(model, train_loader, test_loader):
     import sys
     sys.path.append("../architectural_style_classification")
     from utils.knowledge_graph import GED_metric
-    d = GED_metric(test_data, shap_values_test, dataset='MonumenAI')
-    print(d)
+    if data_set =='MonuAI':
+        d = GED_metric(test_data, shap_values_test, dataset='MonumenAI')
+    elif data_set == 'PascalPart':
+        d = GED_metric(test_data, shap_values_test, dataset='PascalPart')
+
+    print('SHAP GED', d)

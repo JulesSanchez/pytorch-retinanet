@@ -9,7 +9,7 @@ import torch.optim as optim
 from torchvision import transforms
 
 from retinanet import model
-from retinanet.dataloader import CocoDataset, CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, \
+from retinanet.dataloader_pascal import CocoDataset, CSVDataset, collater, Resizer, AspectRatioBasedSampler, Augmenter, \
     Normalizer
 from torch.utils.data import DataLoader
 
@@ -25,14 +25,17 @@ print('CUDA available: {}'.format(torch.cuda.is_available()))
 def main(args=None):
     parser = argparse.ArgumentParser(description='Simple training script for training a RetinaNet network.')
 
-    parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.',default='csv')
+    parser.add_argument('--dataset', help='Dataset type, must be one of csv or coco.', default='csv')
     parser.add_argument('--coco_path', help='Path to COCO directory')
-    parser.add_argument('--csv_train', help='Path to file containing training annotations (see readme)', default='data/train_retinanet.csv')
-    parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)', default='data/class_retinanet.csv')
-    parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)', default='data/val_retinanet.csv')
+    parser.add_argument('--csv_train', help='Path to file containing training annotations (see readme)',
+                        default='data/train_Pascal_part.csv')
+    parser.add_argument('--csv_classes', help='Path to file containing class list (see readme)',
+                        default='data/class_retinanet_Pascal.csv')
+    parser.add_argument('--csv_val', help='Path to file containing validation annotations (optional, see readme)',
+                        default='data/val_Pascal_part.csv')
 
-    parser.add_argument('--model_path', default='coco_resnet_50_map_0_335_state_dict.pt', help='Path to file containing pretrained retinanet')
-
+    parser.add_argument('--model_path', default='coco_resnet_50_map_0_335_state_dict.pt',
+                        help='Path to file containing pretrained retinanet')
 
     parser.add_argument('--depth', help='Resnet depth, must be one of 18, 34, 50, 101, 152', type=int, default=50)
     parser.add_argument('--epochs_detection', help='Number of epochs for detection', type=int, default=50)
@@ -81,24 +84,24 @@ def main(args=None):
 
     # Create the model
     if parser.depth == 18:
-        retinanet = model.resnet18(num_classes=dataset_train.num_classes(), pretrained=True)
+        retinanet = model.resnet18(num_classes=dataset_train.num_classes(), pretrained=True, out_classes=20)
     elif parser.depth == 34:
-        retinanet = model.resnet34(num_classes=dataset_train.num_classes(), pretrained=True)
+        retinanet = model.resnet34(num_classes=dataset_train.num_classes(), pretrained=True, out_classes=20)
     elif parser.depth == 50:
-        retinanet = model.resnet50(num_classes=dataset_train.num_classes(), pretrained=True)
+        retinanet = model.resnet50(num_classes=dataset_train.num_classes(), pretrained=True, out_classes=20)
     elif parser.depth == 101:
-        retinanet = model.resnet101(num_classes=dataset_train.num_classes(), pretrained=True)
+        retinanet = model.resnet101(num_classes=dataset_train.num_classes(), pretrained=True, out_classes=20)
     elif parser.depth == 152:
-        retinanet = model.resnet152(num_classes=dataset_train.num_classes(), pretrained=True)
+        retinanet = model.resnet152(num_classes=dataset_train.num_classes(), pretrained=True, out_classes=20)
     else:
         raise ValueError('Unsupported model depth, must be one of 18, 34, 50, 101, 152')
 
     use_gpu = True
 
     if parser.model_path is not None:
-        print('loading ',parser.model_path)
+        print('loading ', parser.model_path)
         if 'coco' in parser.model_path:
-            retinanet.load_state_dict(torch.load(parser.model_path),strict=False)
+            retinanet.load_state_dict(torch.load(parser.model_path), strict=False)
         else:
             retinanet = torch.load(parser.model_path)
         print('Pretrained model loaded!')
@@ -112,8 +115,7 @@ def main(args=None):
     else:
         retinanet = torch.nn.DataParallel(retinanet)
 
-
-    #Here training the detection
+    # Here training the detection
     retinanet.training = True
 
     optimizer = optim.Adam(retinanet.parameters(), lr=1e-5)
@@ -125,8 +127,8 @@ def main(args=None):
     retinanet.module.freeze_bn()
 
     print('Num training images: {}'.format(len(dataset_train)))
-    mAP_list=[]
-    mAPbest=0
+    mAP_list = []
+    mAPbest = 0
     for epoch_num in range(parser.epochs_detection):
 
         retinanet.train()
@@ -139,16 +141,17 @@ def main(args=None):
                 optimizer.zero_grad()
 
                 if torch.cuda.is_available():
-                    [classification_loss, regression_loss], style = retinanet([data['img'].cuda().float(), data['annot']])
+                    [classification_loss, regression_loss], style = retinanet(
+                        [data['img'].cuda().float(), data['annot']])
                 else:
                     [classification_loss, regression_loss], style = retinanet([data['img'].float(), data['annot']])
 
                 classification_loss = classification_loss.mean()
                 regression_loss = regression_loss.mean()
                 if torch.cuda.is_available():
-                    style_loss = loss_style_classif(style,torch.tensor(data['style']).cuda())
+                    style_loss = loss_style_classif(style, torch.tensor(data['style']).cuda())
                 else:
-                    style_loss = loss_style_classif(style,torch.tensor(data['style']))
+                    style_loss = loss_style_classif(style, torch.tensor(data['style']))
                 loss = classification_loss + regression_loss + style_loss
 
                 if bool(loss == 0):
@@ -162,7 +165,8 @@ def main(args=None):
 
                 print(
                     'Epoch: {} | Iteration: {} | Classification loss: {:1.4f} | Regression loss: {:1.4f} | Style loss: {:1.4f} | Running loss: {:1.4f}'.format(
-                        epoch_num, iter_num, float(classification_loss), float(regression_loss), float(style_loss), np.mean(loss_hist)))
+                        epoch_num, iter_num, float(classification_loss), float(regression_loss), float(style_loss),
+                        np.mean(loss_hist)))
 
                 del classification_loss
                 del regression_loss
@@ -177,13 +181,13 @@ def main(args=None):
 
         elif parser.dataset == 'csv' and parser.csv_val is not None:
             print('Evaluating dataset')
-            mAPclasses,mAP, accu = csv_eval.evaluate(dataset_val, retinanet)
+            mAPclasses, mAP, accu = csv_eval.evaluate(dataset_val, retinanet)
             mAP_list.append(mAP)
-            print('mAP_list',mAP_list)
-        if mAP >mAPbest:
+            print('mAP_list', mAP_list)
+        if mAP > mAPbest:
             print('Saving best checkpoint')
             torch.save(retinanet, 'model_best.pt')
-            mAPbest=mAP
+            mAPbest = mAP
 
         scheduler.step(np.mean(epoch_loss))
         torch.save(retinanet.module, '{}_retinanet_{}.pt'.format(parser.dataset, epoch_num))
@@ -231,7 +235,7 @@ def main(args=None):
     retinanet.module.style_train(True)
     retinanet.training = True
     retinanet.train()
-    optimizer = optim.Adam(retinanet.module.styleClassificationModel.parameters(), lr=5e-3, weight_decay=1e-3)
+    optimizer = optim.Adam(retinanet.module.styleClassificationModel.parameters(), lr=5e-3, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=4, verbose=True)
     loss_hist = collections.deque(maxlen=500)
     loss_style_classif = nn.CrossEntropyLoss()
